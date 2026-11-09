@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import authRouter from './routes/auth.js';
+import booksRouter from './routes/books.js';
 
 const __filename = fileURLToPath(import.meta.url); // 추가
 const __dirname = path.dirname(__filename);         //  추가
@@ -21,7 +22,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); 
 
 // 라우터 연결
-app.use('/api/auth', authRouter)
+app.use('/api/auth', authRouter);
+app.use('/api/books', booksRouter);
 
 // 기본 루트 엔드포인트
 app.get('/', (req, res) => {
