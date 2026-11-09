@@ -76,4 +76,38 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// 4. 소유 도서 대여 등록 - 인증필요
+router.post('/:id/rentals', authMiddleware, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const owner_id = req.user.id; // authMiddleware에서 넘겨준 로그인 유저 ID
+        const { owner_comment, location } = req.body;
+
+        // 필수 입력값 검증
+        if (!owner_comment || !location) {
+            return res.status(400).json({ message: "한 줄 추천평(소개)과 거래 장소는 필수 입력 항목입니다." });
+        }
+
+        // 해당 마스터 도서가 존재하는지 확인
+        const [books] = await db.query('SELECT id FROM master_books WHERE id = ?', [id]);
+        if (books.length === 0) {
+            return res.status(404).json({ message: "존재하지 않는 도서입니다."});
+        }
+
+        // retal_items 테이블에 대여 가능 책 등록
+        const [result] = await db.query(
+            'INSERT INTO rental_items (master_book_id, owner_id, owner_comment, location) VALUES (?, ?, ?, ?)',
+            [id, owner_id, owner_comment, location]
+        );
+
+        res.status(201).json({
+            message: "대여 등록이 완료되었습니다.",
+            rentalItemId: result.insertId
+        });
+    }   catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "서버 오류가 발생했습니다."});
+    }
+});
+
 export default router;
