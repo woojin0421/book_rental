@@ -1,8 +1,10 @@
-const express = require('express');
+import express from 'express';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import db from '../db.js';
+import authMiddleware from '../middlewares/auth.js';
+
 const router = express.Router();
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const db = require('../db');
 
 // 1. 회원가입 API
 router.post('/signup', async (req, res) => {
@@ -83,4 +85,24 @@ router.post('/login', async (req, res) => {
     }
 });
 
-module.exports = reouter;
+// 3. 내 정보 조회 API (인증 미들웨어 적용)
+router.get('/me', authMiddleware, async (req, res) =>{
+    try {
+        //authMiddleware를 통과하면 req.user에 토큰 정보가 담겨 있습니다
+        const [users] = await db.query(
+            'SELECT id, email, nickname, phone_number, student_id, entry_year FROM users Where id = ?',
+            [req.user.id]
+        );
+
+        if (users.length === 0) {
+            return res.status(404).json({ message: "사용자를 찾을 수 없습니다."});
+        }
+
+        res.json({ user:users[0] });
+    } catch(err) {
+        console.error(err);
+        res.status(500).json({ message: "서버 오류가 발생했습니다."})
+    }
+});
+
+export default router;
