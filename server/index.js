@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import authRouter from './routes/auth.js';
 import booksRouter from './routes/books.js';
+import rentalRouter from './routes/rentals.js';
 
 const __filename = fileURLToPath(import.meta.url); // 추가
 const __dirname = path.dirname(__filename);         //  추가
@@ -24,6 +25,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // 라우터 연결
 app.use('/api/auth', authRouter);
 app.use('/api/books', booksRouter);
+app.use('/api/rentals', rentalRouter);
 
 // 기본 루트 엔드포인트
 app.get('/', (req, res) => {
