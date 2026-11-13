@@ -7,6 +7,7 @@ const router = express.Router();
 
 // 1. 대여 신청 - 로그인 필요
 router.post('/', authMiddleware, async (req, res) => {
+    const conn = await db.getConnection();
     try {
         const { rental_item_id } = req.body;
         const borrow_id = req.user.id; // 로그인한 유저 ID
@@ -15,9 +16,11 @@ router.post('/', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: "대여할 아이템 ID가 필요합니다."});
         }
 
+        await conn.beginTransaction();
+
         // 대여 아이템 존재 여부 대여 가능 상태 확인
-        const [items] = await db.query(
-            'SELECT * FROM rental_items WHERE id = ?',
+        const [items] = await conn.query(
+            'SELECT * FROM rental_items WHERE id = ? FOR UPDATE',
             [rental_item_id]
         );
 
@@ -96,6 +99,7 @@ router.get('/me', authMiddleware, async (req, res) => {
 
 // 3. 대여 상태 변경(수락 / 거절) - 로그인 필요
 router.patch('/:id/status', authMiddleware, async (req, res) => {
+    const conn = await db.getConnection();
     try {
         const rentalId = req.params.id;
         const { status } = req.body; // 'ACCEPTED' 또는 'REJECTED'
@@ -107,7 +111,7 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
         }
 
         // 대여 정보 및 소유자 정보 조회
-        const [rentals] = await db.query(
+        const [rentals] = await conn.query(
             `SELECT r.*, ri.owner_id 
              FROM rentals r
              JOIN rental_items ri ON r.rental_item_id = ri.id
