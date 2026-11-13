@@ -210,7 +210,7 @@ router.patch('/:id/return', authMiddleware, async (req, res) => {
 
         const rental = rentals[0];
 
-        // 👤 빌린 사람이나 책 주인만 반납 처리 가능
+        // 빌린 사람이나 책 주인만 반납 처리 가능
         if (rental.borrower_id !== userId && rental.owner_id !== userId) {
             return res.status(403).json({ message: "반납 처리를 할 권한이 없습니다." });
         }
@@ -219,14 +219,64 @@ router.patch('/:id/return', authMiddleware, async (req, res) => {
         if (rental.status !== 'ACCEPTED') {
             return res.status(400).json({ message: "대여 중('ACCEPTED')인 상태에서만 반납 처리할 수 있습니다." });
         }
-
+        await conn.beginTransaction();
         // 'RETURNED'로 변경
-        await db.query(
+        await conn.query(
             "UPDATE rentals SET status = 'RETURNED' WHERE id = ?",
             [rentalId]
         );
 
+        await conn.query(
+          "UPDATE rental_items SET status = 'AVAILABLE' WHERE id = ?",
+        [rental.rental_item_id]
+        );
+
+        await conn.commit();
+
         res.json({ message: "도서 반납 처리가 성공적으로 완료되었습니다." });
+
+    } catch (error) {
+        await conn.rollback();
+        console.error(error);
+        res.status(500).json({ message: "서버 오류가 발생했습니다." });
+    } finally {
+        conn.release();
+    }
+});
+
+// 5. 특정 책의 대여 신청자 목록 조회 (책 주인 전용) - 로그인 필요
+router.get('/items/:itemId/requests', authMiddleware, async (req, res) => {
+    try {
+        const itemId = req.params.itemId;
+        const userId = req.user.id;
+
+        // 책 존재 여부 및 주인 확인
+        const [items] = await db.query(
+            'SELECT owner_id FROM rental_items WHERE id = ?',
+            [itemId]
+        );
+
+        if (items.length === 0) {
+            return res.status(404).json({ message: "존재하지 않는 대여 도서입니다." });
+        }
+
+        if (items[0].owner_id !== userId) {
+            return res.status(403).json({ message: "본인이 등록한 책의 신청 내역만 조회할 수 있습니다." });
+        }
+
+        // 해당 책에 들어온 대여 신청 목록과 신청자 정보 조회
+        const [requests] = await db.query(
+            `SELECT r.id AS rental_id, r.status, r.created_at,
+                    u.id AS borrower_id, u.nickname AS borrower_nickname
+             FROM rentals r
+             JOIN users u ON r.borrower_id = u.id
+             WHERE r.rental_item_id = ?
+                AND r.status = 'REQUESTED'
+             ORDER BY r.created_at ASC`,
+            [itemId]
+        );
+
+        res.json({ requests });
 
     } catch (error) {
         console.error(error);
@@ -234,6 +284,47 @@ router.patch('/:id/return', authMiddleware, async (req, res) => {
     }
 });
 
+// 6. 대여 신청 취소 (신청자 본인 전용) - 로그인 필요
+router.delete('/:id', authMiddleware, async (req, res) => {
+    try {
+        const rentalId = req.params.id;
+        const userId = req.user.id;
 
+        // 대여 신청 정보 조회
+        const [rentals] = await db.query(
+            'SELECT * FROM rentals WHERE id = ?',
+            [rentalId]
+        );
+
+        // 존재하는 대여 신청인지 확인
+        if (rentals.length === 0) {
+            return res.status(404).json({ message: "존재하지 않는 대여 신청입니다." });
+        }
+
+        const rental = rentals[0];
+
+        // 신청자 본인이 맞는지 확인 (책 주인이 아닌 빌리려는 사람!)
+        if (rental.borrower_id !== userId) {
+            return res.status(403).json({ message: "본인의 대여 신청만 취소할 수 있습니다." });
+        }
+
+        // 아직 수락 전('REQUESTED') 상태인지 확인
+        if (rental.status !== 'REQUESTED') {
+            return res.status(400).json({ message: "대기 중('REQUESTED')인 신청만 취소할 수 있습니다." });
+        }
+
+        // 신청 기록 삭제
+        await db.query(
+            'DELETE FROM rentals WHERE id = ?',
+            [rentalId]
+        );
+
+        res.json({ message: "대여 신청이 성공적으로 취소되었습니다." });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "서버 오류가 발생했습니다." });
+    }
+});
 
 export default router;
