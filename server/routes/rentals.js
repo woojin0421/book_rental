@@ -30,8 +30,8 @@ router.post('/', authMiddleware, async (req, res) => {
 
         const rentalItem = items[0];
 
-        if ( rentalItem.status != 'AVAILABLE') {
-            return res.status(400).json({ message: "현재 대여 가능한 상태가 아닙니다." });
+        if ( rentalItem.status !== 'AVAILABLE') {
+            return res.status(400).json({ message: "이미 대여 신청을 완료한 도서입니다." });
         }
 
         // 자기가 등록한 책은 스스로 빌릴 수 없음
@@ -39,18 +39,35 @@ router.post('/', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: "자신이 등록한 책은 대여 신청할 수 없습니다."});
         }
 
+         const [existingRentals] = await conn.query(
+            `SELECT id FROM rentals 
+            WHERE rental_item_id = ? 
+            AND borrower_id = ? 
+            AND status = 'REQUESTED'`,
+            [rental_item_id, borrow_id]
+        );
+
+        if (existingRentals.length > 0) {
+            return res.status(400).json({ message: "이미 대여 신청을 완료한 도서입니다." });
+        }
+
         const [result] = await db.query(
             'INSERT INTO rentals (rental_item_id, borrower_id, status) VALUES (?, ?, ?)',
             [rental_item_id, borrow_id, 'REQUESTED']
         );
 
+        await conn.commit();
+
         res.status(201).json({
-            message: "대여 신청이 선공적으로 완료되었습니다.",
+            message: "대여 신청이 성공적으로 완료되었습니다.",
             rentalId: result.insertId
         });
     }   catch (err) {
         console.error(err);
+        conn.rollback();
         res.status(500).json({ message: "서버 오류가 발생했습니다." });
+    } finally {
+        conn.release();
     }
 });
 
@@ -135,27 +152,51 @@ router.patch('/:id/status', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: "이미 처리되었거나 변경할 수 없는 대여 상태입니다." });
         }
 
+        await conn.beginTransaction();
+
         // 대여 상태 업데이트
-        await db.query(
+        await conn.query(
             'UPDATE rentals SET status = ? WHERE id = ?',
             [status, rentalId]
         );
+
+        if (status === 'ACCEPTED') {
+            await conn.query (
+                `UPDATE rentals 
+                 SET status = 'REJECTED' 
+                 WHERE rental_item_id = ? 
+                   AND id != ? 
+                   AND status = 'REQUESTED'`,
+                [rental.rental_item_id, rentalId]
+            );
+
+            // 2) 해당 책의 상태를 'RENTED'(대여 중)로 변경
+            await conn.query(
+                "UPDATE rental_items SET status = 'RENTED' WHERE id = ?",
+                [rental.rental_item_id]
+            );
+        }
+        await conn.commit();
 
         res.json({ message: `대여 신청이 성공적으로 ${status === 'ACCEPTED' ? '수락' : '거절'}되었습니다. 🤝` });
 
     } catch (error) {
         console.error(error);
+        await conn.rollback()
         res.status(500).json({ message: "서버 오류가 발생했습니다." });
+    } finally {
+        conn.release();
     }
 });
 // 4. 도서 반납 처리 - 로그인 필요
 router.patch('/:id/return', authMiddleware, async (req, res) => {
+    const conn = await db.getConnection();
     try {
         const rentalId = req.params.id;
         const userId = req.user.id;
 
         //  대여 정보 조회 
-        const [rentals] = await db.query(
+        const [rentals] = await conn.query(
             `SELECT r.*, ri.owner_id 
              FROM rentals r
              JOIN rental_items ri ON r.rental_item_id = ri.id
