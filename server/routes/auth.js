@@ -51,7 +51,10 @@ router.post('/login', async (req, res) => {
         // 유저 존재 여부 확인
         const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
         if (users.length == 0) {
-            return res.status(400).json({ message: "아이디 또는 비번이 올바르지 않습니다"});
+            return res.status(400).json({ 
+                code: 'USER_NOT_FOUND',
+                message: "등록되지 않은 계정입니다. 회원가입을 먼저 진행해 주세요."
+            });
         }
         
         const user = users[0];
@@ -59,7 +62,10 @@ router.post('/login', async (req, res) => {
         // 비밀번호 일치 여부 대조
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-           return res.status(400).json({ message: "아이디 또는 비번이 올바르지 않습니다"});
+           return res.status(400).json({ 
+               code: 'INVALID_PASSWORD',
+               message: "비밀번호가 일치하지 않습니다. 다시 확인해 주세요." 
+           });
         }
 
         // JWT 로그인 토큰 발급
@@ -102,6 +108,31 @@ router.get('/me', authMiddleware, async (req, res) =>{
     } catch(err) {
         console.error(err);
         res.status(500).json({ message: "서버 오류가 발생했습니다."})
+    }
+});
+
+// 4. 내 프로필(이름/닉네임) 수정 API - 로그인 필요
+router.patch('/me', authMiddleware, async (req, res) => {
+    try {
+        const { nickname } = req.body;
+        if (!nickname || !nickname.trim()) {
+            return res.status(400).json({ message: "변경할 닉네임을 입력해주세요." });
+        }
+
+        await db.query('UPDATE users SET nickname = ? WHERE id = ?', [nickname.trim(), req.user.id]);
+
+        const [users] = await db.query(
+            'SELECT id, email, nickname, phone_number, student_id, entry_year FROM users WHERE id = ?',
+            [req.user.id]
+        );
+
+        res.json({ 
+            message: "이름(닉네임)이 성공적으로 변경되었습니다.", 
+            user: users[0] 
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "닉네임 변경 중 오류가 발생했습니다." });
     }
 });
 
