@@ -8,38 +8,46 @@ const router = express.Router();
 // 1. 대여 신청 - 로그인 필요
 router.post('/', authMiddleware, async (req, res) => {
     const conn = await db.getConnection();
+    let inTransaction = false;
     try {
         const { rental_item_id } = req.body;
         const borrow_id = req.user.id; // 로그인한 유저 ID
 
         if (!rental_item_id) {
-            return res.status(400).json({ message: "대여할 아이템 ID가 필요합니다."});
+            return res.status(400).json({ message: "대여할 아이템 ID가 필요합니다." });
         }
 
         await conn.beginTransaction();
+        inTransaction = true;
 
-        // 대여 아이템 존재 여부 대여 가능 상태 확인
+        // 대여 아이템 존재 여부 대여 가능 상태 확인 (FOR UPDATE 락)
         const [items] = await conn.query(
             'SELECT * FROM rental_items WHERE id = ? FOR UPDATE',
             [rental_item_id]
         );
 
         if (items.length === 0) {
+            await conn.rollback();
+            inTransaction = false;
             return res.status(404).json({ message: "존재하지 않는 대여 아이템 입니다." });
         }
 
         const rentalItem = items[0];
 
-        if ( rentalItem.status !== 'AVAILABLE') {
-            return res.status(400).json({ message: "이미 대여 신청을 완료한 도서입니다." });
+        if (rentalItem.status !== 'AVAILABLE') {
+            await conn.rollback();
+            inTransaction = false;
+            return res.status(400).json({ message: "현재 대여 가능한 상태가 아닙니다." });
         }
 
         // 자기가 등록한 책은 스스로 빌릴 수 없음
-        if ( rentalItem.owner_id === borrow_id) {
-            return res.status(400).json({ message: "자신이 등록한 책은 대여 신청할 수 없습니다."});
+        if (rentalItem.owner_id === borrow_id) {
+            await conn.rollback();
+            inTransaction = false;
+            return res.status(400).json({ message: "자신이 등록한 책은 대여 신청할 수 없습니다." });
         }
 
-         const [existingRentals] = await conn.query(
+        const [existingRentals] = await conn.query(
             `SELECT id FROM rentals 
             WHERE rental_item_id = ? 
             AND borrower_id = ? 
@@ -48,23 +56,29 @@ router.post('/', authMiddleware, async (req, res) => {
         );
 
         if (existingRentals.length > 0) {
+            await conn.rollback();
+            inTransaction = false;
             return res.status(400).json({ message: "이미 대여 신청을 완료한 도서입니다." });
         }
 
-        const [result] = await db.query(
+        // [버그 수정]: db.query 대신 트랜잭션을 소유한 conn.query를 사용하여 Lock Timeout 원천 차단!
+        const [result] = await conn.query(
             'INSERT INTO rentals (rental_item_id, borrower_id, status) VALUES (?, ?, ?)',
             [rental_item_id, borrow_id, 'REQUESTED']
         );
 
         await conn.commit();
+        inTransaction = false;
 
         res.status(201).json({
             message: "대여 신청이 성공적으로 완료되었습니다.",
             rentalId: result.insertId
         });
-    }   catch (err) {
-        console.error(err);
-        conn.rollback();
+    } catch (err) {
+        console.error("대여 신청 처리 오류:", err);
+        if (inTransaction) {
+            try { await conn.rollback(); } catch (rErr) {}
+        }
         res.status(500).json({ message: "서버 오류가 발생했습니다." });
     } finally {
         conn.release();
